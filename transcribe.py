@@ -1,9 +1,9 @@
 import whisper
 import os
 import time
-import openai
-import json
+from models import gpt_4_turbo, mistral_7b
 import requests
+import argparse
 
 
 audio_folder = "/home/david/projects/local-home-assistant/audio/"
@@ -12,6 +12,17 @@ SHOPPING_LIST_ID = os.environ.get("SHOPPING_LIST_ID")
 
 
 NOTION_BLOCK_ENDPOINT = "https://api.notion.com/v1/blocks/" + SHOPPING_LIST_ID + "/children"
+
+model_functions = {
+    'gpt4': gpt_4_turbo,
+    'mistral': mistral_7b,
+}
+
+# Create the parser
+parser = argparse.ArgumentParser(description='Choose a model to run.')
+
+
+
 
 
 def body(item):
@@ -60,40 +71,16 @@ def add_item_to_shopping_list(items):
 
 
 def send_to_api(text):
-    print("Sending to API: " + text)
-    messages = [{"role": "user", "content": text}]
-    functions = [
-        {
-            "name": "add_item_to_shopping_list",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "description": "The items to add to the shopping list",
-                        "items": {
-                            "type": "string",
-                            "description": "A single item to add to the shopping list",
-                        },
-                    },
-                },
-                "required": ["item"],
-            },
-        }
-    ]
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-0613",
-        messages=messages,
-        functions=functions,
-        function_call="auto",  # auto is default, but we'll be explicit
-    )
-    response_message = response["choices"][0]["message"]    
-    if (response_message.function_call) and (response_message.function_call.name == "add_item_to_shopping_list"):
-        arguments = json.loads(response_message.function_call.arguments)
-        add_item_to_shopping_list(arguments['items'])
+    # Parse the arguments
+    args = parser.parse_args()
+    print(f"Sending to {args.model}: " + text)
+    call = model_functions[args.model](text)
+    if (call["name"] == "add_item_to_shopping_list"):
+        add_item_to_shopping_list(call["parameters"]['items'])
+    elif(call.name == "trigger_alert"):
+        print("Triggering alert with severity: " + call["parameters"]['severity'])
     else:
-        print("Did not find a function call.")    
+        print("Unknown function call: " + call["name"])  
 
 def transcribe():
     print("Started monitoring audio folder.")
@@ -107,18 +94,14 @@ def transcribe():
                     print("Transcribing audio file: " + filename)
                     filepath = os.path.join(audio_folder, filename)
                     result = model.transcribe(filepath)
+                    os.remove(filepath)
                     text = result["text"].replace(",", "").replace(".", "").replace(":", "").replace(";", "")
                     text = " ".join(text.split()).lower()
                     if "okay computer" in text:
                         print("Found 'okay computer' in text. Sending to API.")
-                        send_to_api(text.replace("hello house", "").strip())
+                        send_to_api(text.replace("okay computer", "").strip())
                     else:
                         print("No command:" + text)
-
-
-
-                    # Optionally, you can delete the transcribed file
-                    os.remove(filepath)
             
             # Sleep for a certain period before checking again
             time.sleep(1)
@@ -127,8 +110,17 @@ def transcribe():
 
 
 
+
+
+
+
+
 if __name__ == "__main__":
-    transcribe()     
+    # Add the arguments
+    parser.add_argument('--model', type=str, default='gpt4', choices=model_functions.keys(),
+                    help='The model to run. Default is gpt4.')
+
+    transcribe()   
 
 
 
